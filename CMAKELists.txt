@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.15)
+project(FinanceApp)
+
+set(CMAKE_CXX_STANDARD 17)
+
+# Find libcurl package
+find_package(CURL REQUIRED)
+
+# Add your source files and sqlite3.c
+add_executable(FinanceApp main.cc sqlite3.c)
+
+# Include current directory for sqlite3.h
+target_include_directories(FinanceApp PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Link libraries
+target_link_libraries(FinanceApp PRIVATE CURL::libcurl)
+
+# JSON and XML libraries
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(FinanceApp PRIVATE nlohmann_json::nlohmann_json)
+
+find_package(tinyxml2 CONFIG REQUIRED)
+target_link_libraries(FinanceApp PRIVATE tinyxml2::tinyxml2)

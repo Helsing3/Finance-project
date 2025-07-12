@@ -1,0 +1,279 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <cctype>
+#include <unordered_map>
+#include <curl/curl.h>
+#include <nlohmann/json.hpp>
+#include <tinyxml2.h>
+#include "sqlite3.h"
+
+
+using namespace std;
+using namespace tinyxml2;
+using json = nlohmann::json;
+
+// Callback for libcurl
+size_t WriteCallback(void* contents, size_t size, size_t nmemb, string* output) {
+    output->append((char*)contents, size * nmemb);
+    return size * nmemb;
+}
+
+string trim(const string& s) {
+    size_t start = s.find_first_not_of(" \t\n\r");
+    size_t end = s.find_last_not_of(" \t\n\r");
+    return (start == string::npos) ? "" : s.substr(start, end - start + 1);
+}
+
+string stripNamespace(const char* tagName) {
+    string name(tagName);
+    auto pos = name.find(':');
+    if (pos != string::npos) {
+        return name.substr(pos + 1);
+    }
+    return name;
+}
+
+const char* schema = R"sql(
+    CREATE TABLE IF NOT EXISTS firms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE
+    );
+    CREATE TABLE IF NOT EXISTS filings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        firm_id INTEGER,
+        filing_date TEXT,
+        quarter TEXT,
+        FOREIGN KEY(firm_id) REFERENCES firms(id)
+    );
+    CREATE TABLE IF NOT EXISTS holdings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filing_id INTEGER,
+        cusip TEXT,
+        name_of_issuer TEXT,
+        shares INTEGER,
+        value INTEGER,
+        FOREIGN KEY(filing_id) REFERENCES filings(id)
+    );
+)sql";
+
+// Download a URL into a string
+string fetchURL(const string& url) {
+    CURL* curl = curl_easy_init();
+    string response;
+
+    if (!curl) {
+        cerr << "curl_easy_init() failed" << endl;
+        return "";
+    }
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Accept: application/xml, text/xml, */*;q=0.9");
+    headers = curl_slist_append(headers, "Connection: keep-alive");
+
+    // 🛠 Replace with your company/project info
+    const char* userAgent = "FinanceApp/1.0 (Contact: vilhelm.helsing@gmail.com)";
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent);
+    curl_easy_setopt(curl, CURLOPT_REFERER, "https://www.sec.gov/");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    cout << "HTTP response code: " << http_code << endl;
+
+    if (res != CURLE_OK) {
+        cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << endl;
+    } else if (http_code != 200) {
+        cerr << "Server returned non-200 response: " << http_code << endl;
+        response = "";
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (!response.empty()) {
+        cout << "Downloaded " << response.size() << " bytes from " << url << endl;
+        //cout << "First 20 characters:\n" << response.substr(0, 20) << "\n";
+    }
+
+    return response;
+}
+
+// Parse the XML and check for AAPL, MSFT, ASTS
+void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs, sqlite3* db) {
+    if (xmlContent.find("<html") != string::npos || xmlContent.find("<!DOCTYPE html") != string::npos) {
+        cerr << "Received HTML instead of XML. Probably an error page." << endl;
+        return;
+    }
+
+    tinyxml2::XMLDocument doc;
+    if (doc.Parse(xmlContent.c_str()) != tinyxml2::XML_SUCCESS) {
+        cerr << "Failed to parse XML" << endl;
+        return;
+    }
+
+    tinyxml2::XMLElement* root = doc.RootElement(); // <ns2:informationTable>
+    if (!root || string(root->Name()).find("informationTable") == string::npos) {
+        cerr << "Invalid 13F XML structure" << endl;
+        return;
+    }
+
+    unordered_map<string, long long> totalValue;
+    unordered_map<string, long long> totalShares;
+
+    for (XMLElement* entry = root->FirstChildElement(); entry; entry = entry->NextSiblingElement()) {
+        //cout << "Checking child: " << entry->Name() << endl;
+        if (stripNamespace(entry->Name()) != "infoTable") {
+            cout << "Skipping: " << entry->Name() << endl;
+            continue;
+        }
+
+        // Lambda to get direct child text by tag name
+        auto getText = [&](XMLElement* elem, const char* tagName) -> const char* {
+            for (XMLElement* child = elem->FirstChildElement(); child; child = child->NextSiblingElement()) {
+                if (stripNamespace(child->Name()) == tagName)
+                    return child->GetText();
+            }
+            return nullptr;
+        };
+
+        const char* name = getText(entry, "nameOfIssuer");
+        const char* cusip = getText(entry, "cusip");
+        const char* value = getText(entry, "value");
+
+        // sshPrnamt is nested inside <shrsOrPrnAmt>
+        const char* shares = nullptr;
+        XMLElement* shrsOrPrnAmt = nullptr;
+
+        for (XMLElement* child = entry->FirstChildElement(); child; child = child->NextSiblingElement()) {
+            if (stripNamespace(child->Name()) == "shrsOrPrnAmt") {
+                shrsOrPrnAmt = child;
+                break;
+            }
+        }
+        if (shrsOrPrnAmt) {
+            shares = getText(shrsOrPrnAmt, "sshPrnamt");
+        }
+
+        if (!name || !cusip || !value || !shares) continue;
+
+        string cusipStr = trim(cusip);
+
+        if (find(targetCUSIPs.begin(), targetCUSIPs.end(), cusipStr) != targetCUSIPs.end()) {
+            long long val = atoll(value); 
+            long long shr = atoll(shares);
+            totalValue[cusipStr] += val;
+            totalShares[cusipStr] += shr;
+        }
+    }
+
+    for (const auto& target : targetCUSIPs) {
+        cout << "Total for CUSIP " << target << ": Value = $" << totalValue[target] 
+             << "K, Shares = " << totalShares[target] << endl;
+    }
+
+    // Insert data into database
+    sqlite3_stmt* stmt;
+
+    // Insert or ignore firm
+    sqlite3_exec(db, "INSERT OR IGNORE INTO firms (name) VALUES ('Goldman Sachs');", nullptr, nullptr, nullptr);
+
+    // Get firm ID
+    int firm_id = -1;
+    sqlite3_prepare_v2(db, "SELECT id FROM firms WHERE name = 'Goldman Sachs';", -1, &stmt, nullptr);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        firm_id = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+
+    // Add a sample filing (e.g., "2025-03-31", "2025Q1")
+    sqlite3_prepare_v2(db, 
+        "INSERT OR IGNORE INTO filings (firm_id, filing_date, quarter) VALUES (?, '2025-03-31', '2025Q1');",
+        -1, &stmt, nullptr);
+    sqlite3_bind_int(stmt, 1, firm_id);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    // Get filing ID
+    int filing_id = -1;
+    sqlite3_prepare_v2(db,
+        "SELECT id FROM filings WHERE firm_id = ? AND quarter = '2025Q1';",
+        -1, &stmt, nullptr);
+    sqlite3_bind_int(stmt, 1, firm_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        filing_id = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+
+    // Insert holdings for each target CUSIP
+    for (const auto& target : targetCUSIPs) {
+        if (totalValue[target] > 0) {
+            sqlite3_prepare_v2(db,
+                "INSERT INTO holdings (filing_id, cusip, name_of_issuer, shares, value) VALUES (?, ?, ?, ?, ?);",
+                -1, &stmt, nullptr);
+            sqlite3_bind_int(stmt, 1, filing_id);
+            sqlite3_bind_text(stmt, 2, target.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, "Target Stock", -1, SQLITE_STATIC);
+            sqlite3_bind_int64(stmt, 4, totalShares[target]);
+            sqlite3_bind_int64(stmt, 5, totalValue[target]);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+}
+
+int main() {
+    
+    sqlite3* db;
+    int rc = sqlite3_open("holdings.db", &db);
+    if (rc) {
+        cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+        return 1;
+    }
+
+    // Create database schema
+    char* errMsg = nullptr;
+    rc = sqlite3_exec(db, schema, nullptr, nullptr, &errMsg);
+    if (rc != SQLITE_OK) {
+        cerr << "SQL error: " << errMsg << endl;
+        sqlite3_free(errMsg);
+        sqlite3_close(db);
+        return 1;
+    }
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    // SEC XML 13F links for Goldman Sachs (example)
+    vector<string> urls = {
+        "https://www.sec.gov/Archives/edgar/data/886982/000076999325000340/2025Q1updated.xml"
+    };
+
+    vector<string> targetCUSIPs = {
+        "037833100", // AAPL
+        "594918104", // MSFT
+        "00217D100"  // ASTS
+    };
+
+    for (const auto& url : urls) {
+        cout << "\n--- Processing: " << url << " ---\n";
+        string xmlContent = fetchURL(url);
+        if (xmlContent.empty()) {
+            cerr << "Failed to download XML from " << url << endl;
+            continue;
+        }
+        parse13F(xmlContent, targetCUSIPs, db);
+    }
+
+    sqlite3_close(db);
+    curl_global_cleanup();
+    return 0;
+}
