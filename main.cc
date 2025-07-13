@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <thread>
+#include <chrono>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <tinyxml2.h>
@@ -108,8 +110,7 @@ string fetchURL(const string& url) {
     return response;
 }
 
-// Parse the XML and check for AAPL, MSFT, ASTS
-void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs, sqlite3* db) {
+void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs,const string& firmName, sqlite3* db) {
     if (xmlContent.find("<html") != string::npos || xmlContent.find("<!DOCTYPE html") != string::npos) {
         cerr << "Received HTML instead of XML. Probably an error page." << endl;
         return;
@@ -130,66 +131,19 @@ void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs, sqli
     unordered_map<string, long long> totalValue;
     unordered_map<string, long long> totalShares;
 
-    for (XMLElement* entry = root->FirstChildElement(); entry; entry = entry->NextSiblingElement()) {
-        //cout << "Checking child: " << entry->Name() << endl;
-        if (stripNamespace(entry->Name()) != "infoTable") {
-            cout << "Skipping: " << entry->Name() << endl;
-            continue;
-        }
-
-        // Lambda to get direct child text by tag name
-        auto getText = [&](XMLElement* elem, const char* tagName) -> const char* {
-            for (XMLElement* child = elem->FirstChildElement(); child; child = child->NextSiblingElement()) {
-                if (stripNamespace(child->Name()) == tagName)
-                    return child->GetText();
-            }
-            return nullptr;
-        };
-
-        const char* name = getText(entry, "nameOfIssuer");
-        const char* cusip = getText(entry, "cusip");
-        const char* value = getText(entry, "value");
-
-        // sshPrnamt is nested inside <shrsOrPrnAmt>
-        const char* shares = nullptr;
-        XMLElement* shrsOrPrnAmt = nullptr;
-
-        for (XMLElement* child = entry->FirstChildElement(); child; child = child->NextSiblingElement()) {
-            if (stripNamespace(child->Name()) == "shrsOrPrnAmt") {
-                shrsOrPrnAmt = child;
-                break;
-            }
-        }
-        if (shrsOrPrnAmt) {
-            shares = getText(shrsOrPrnAmt, "sshPrnamt");
-        }
-
-        if (!name || !cusip || !value || !shares) continue;
-
-        string cusipStr = trim(cusip);
-
-        if (find(targetCUSIPs.begin(), targetCUSIPs.end(), cusipStr) != targetCUSIPs.end()) {
-            long long val = atoll(value); 
-            long long shr = atoll(shares);
-            totalValue[cusipStr] += val;
-            totalShares[cusipStr] += shr;
-        }
-    }
-
-    for (const auto& target : targetCUSIPs) {
-        cout << "Total for CUSIP " << target << ": Value = $" << totalValue[target] 
-             << "K, Shares = " << totalShares[target] << endl;
-    }
-
-    // Insert data into database
+    // Insert or ignore firm
     sqlite3_stmt* stmt;
 
-    // Insert or ignore firm
-    sqlite3_exec(db, "INSERT OR IGNORE INTO firms (name) VALUES ('Goldman Sachs');", nullptr, nullptr, nullptr);
+    // Insert or ignore firm (prepared)
+    sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO firms (name) VALUES (?);", -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, firmName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
 
-    // Get firm ID
+    // Select firm ID
+    sqlite3_prepare_v2(db, "SELECT id FROM firms WHERE name = ?;", -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, firmName.c_str(), -1, SQLITE_TRANSIENT);
     int firm_id = -1;
-    sqlite3_prepare_v2(db, "SELECT id FROM firms WHERE name = 'Goldman Sachs';", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         firm_id = sqlite3_column_int(stmt, 0);
     }
@@ -214,22 +168,63 @@ void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs, sqli
     }
     sqlite3_finalize(stmt);
 
-    // Insert holdings for each target CUSIP
-    for (const auto& target : targetCUSIPs) {
-        if (totalValue[target] > 0) {
-            sqlite3_prepare_v2(db,
-                "INSERT INTO holdings (filing_id, cusip, name_of_issuer, shares, value) VALUES (?, ?, ?, ?, ?);",
-                -1, &stmt, nullptr);
-            sqlite3_bind_int(stmt, 1, filing_id);
-            sqlite3_bind_text(stmt, 2, target.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, "Target Stock", -1, SQLITE_STATIC);
-            sqlite3_bind_int64(stmt, 4, totalShares[target]);
-            sqlite3_bind_int64(stmt, 5, totalValue[target]);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
+    for (XMLElement* entry = root->FirstChildElement(); entry; entry = entry->NextSiblingElement()) {
+        if (stripNamespace(entry->Name()) != "infoTable") continue;
+
+        auto getText = [&](XMLElement* elem, const char* tagName) -> const char* {
+            for (XMLElement* child = elem->FirstChildElement(); child; child = child->NextSiblingElement()) {
+                if (stripNamespace(child->Name()) == tagName)
+                    return child->GetText();
+            }
+            return nullptr;
+        };
+
+        const char* name = getText(entry, "nameOfIssuer");
+        const char* cusip = getText(entry, "cusip");
+        const char* value = getText(entry, "value");
+
+        // sshPrnamt is nested inside <shrsOrPrnAmt>
+        const char* shares = nullptr;
+        XMLElement* shrsOrPrnAmt = nullptr;
+        for (XMLElement* child = entry->FirstChildElement(); child; child = child->NextSiblingElement()) {
+            if (stripNamespace(child->Name()) == "shrsOrPrnAmt") {
+                shrsOrPrnAmt = child;
+                break;
+            }
+        }
+        if (shrsOrPrnAmt) {
+            shares = getText(shrsOrPrnAmt, "sshPrnamt");
+        }
+
+        if (!name || !cusip || !value || !shares) continue;
+
+        string cusipStr = trim(cusip);
+
+        // Insert all entries
+        sqlite3_prepare_v2(db,
+            "INSERT OR IGNORE INTO holdings (filing_id, cusip, name_of_issuer, shares, value) VALUES (?, ?, ?, ?, ?);",
+            -1, &stmt, nullptr);
+        sqlite3_bind_int(stmt, 1, filing_id);
+        sqlite3_bind_text(stmt, 2, cusipStr.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, name, -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 4, atoll(shares));
+        sqlite3_bind_int64(stmt, 5, atoll(value));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+
+        // Track totals for optional reporting
+        if (find(targetCUSIPs.begin(), targetCUSIPs.end(), cusipStr) != targetCUSIPs.end()) {
+            totalValue[cusipStr] += atoll(value);
+            totalShares[cusipStr] += atoll(shares);
         }
     }
+
+    for (const auto& target : targetCUSIPs) {
+        cout << "Total for CUSIP " << target << ": Value = $" << totalValue[target] 
+             << "K, Shares = " << totalShares[target] << endl;
+    }
 }
+
 
 int main() {
     
@@ -253,8 +248,9 @@ int main() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     // SEC XML 13F links for Goldman Sachs (example)
-    vector<string> urls = {
-        "https://www.sec.gov/Archives/edgar/data/886982/000076999325000340/2025Q1updated.xml"
+    vector<pair<string,string>> filings = {
+        {"Goldman Sachs", "https://www.sec.gov/Archives/edgar/data/886982/000076999325000340/2025Q1updated.xml"},
+        {"Key Colony Management, LLC", "https://www.sec.gov/Archives/edgar/data/1336885/000095012325006170/42945.xml" }
     };
 
     vector<string> targetCUSIPs = {
@@ -263,14 +259,15 @@ int main() {
         "00217D100"  // ASTS
     };
 
-    for (const auto& url : urls) {
-        cout << "\n--- Processing: " << url << " ---\n";
+    for (const auto& [firmName, url] : filings) {
+        cout << "\n--- Processing: " << firmName << " | " << url << " ---\n";
         string xmlContent = fetchURL(url);
         if (xmlContent.empty()) {
             cerr << "Failed to download XML from " << url << endl;
             continue;
         }
-        parse13F(xmlContent, targetCUSIPs, db);
+        parse13F(xmlContent, targetCUSIPs, firmName, db);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 
     sqlite3_close(db);

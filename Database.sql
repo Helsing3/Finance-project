@@ -18,5 +18,6 @@ CREATE TABLE holdings (
     name_of_issuer TEXT,
     shares INTEGER,
     value INTEGER,
+    UNIQUE(filing_id, cusip),
     FOREIGN KEY(filing_id) REFERENCES filings(id)
 );
