@@ -249,7 +249,7 @@ int main() {
 
     // SEC XML 13F links for Goldman Sachs (example)
     vector<pair<string,string>> filings = {
-        {"Goldman Sachs", "https://www.sec.gov/Archives/edgar/data/886982/000076999325000340/2025Q1updated.xml"},
+        {//"Goldman Sachs", "https://www.sec.gov/Archives/edgar/data/886982/000076999325000340/2025Q1updated.xml"},
         {"Key Colony Management, LLC", "https://www.sec.gov/Archives/edgar/data/1336885/000095012325006170/42945.xml" }
     };
 
