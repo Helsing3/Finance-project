@@ -21,3 +21,7 @@ CREATE TABLE holdings (
     UNIQUE(filing_id, cusip),
     FOREIGN KEY(filing_id) REFERENCES filings(id)
 );
+
+-- Optional for performance
+CREATE INDEX idx_filings_firm_quarter ON filings(firm_id, quarter);
+CREATE INDEX idx_holdings_filing_cusip ON holdings(filing_id, cusip);

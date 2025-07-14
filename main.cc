@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <regex>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <chrono>
 #include <curl/curl.h>
@@ -37,6 +41,13 @@ string stripNamespace(const char* tagName) {
     return name;
 }
 
+string getQuarterFromDate(const string& dateStr) {
+    int year = stoi(dateStr.substr(0, 4));
+    int month = stoi(dateStr.substr(5, 2));
+    int q = (month - 1) / 3 + 1;
+    return to_string(year) + "Q" + to_string(q);
+}
+
 const char* schema = R"sql(
     CREATE TABLE IF NOT EXISTS firms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +70,72 @@ const char* schema = R"sql(
         FOREIGN KEY(filing_id) REFERENCES filings(id)
     );
 )sql";
+
+// returns: (firmName, folderUrl, quarter)
+vector<tuple<string, string,string, string>> extract13FHRUrls(const string& idxPath) {
+    ifstream file(idxPath);
+    vector<tuple<string, string,string, string>> filings;
+    if (!file.is_open()) {
+        cerr << "Could not open master.idx file.\n";
+        return filings;
+    }
+
+    string line;
+    bool startReading = false;
+
+    while (getline(file, line)) {
+        // Skip header until the real data starts
+        if (!startReading) {
+            if (line.find("CIK|Company Name|Form Type|Date Filed|Filename") != string::npos) {
+                startReading = true;
+            }
+            continue;
+        }
+
+        vector<string> fields;
+        stringstream ss(line);
+        string field;
+
+        while (getline(ss, field, '|')) {
+            fields.push_back(field);
+        }
+
+        if (fields.size() != 5) continue;
+
+        string cik = fields[0];
+        string name = fields[1];
+        string formType = fields[2];
+        string dateFiled = fields[3]; // Format: YYYY-MM-DD
+        string filename = fields[4];
+
+        if (formType != "13F-HR") continue;
+
+        // Extract accession number and format it
+        smatch match;
+        if (regex_search(filename, match, regex(R"(data/(\d+)/([^/]+)\.txt)"))) {
+            string folderCIK = match[1].str();
+            string accessionDashes = match[2].str();
+            string accessionNoDashes = accessionDashes;
+            accessionNoDashes.erase(remove(accessionNoDashes.begin(), accessionNoDashes.end(), '-'), accessionNoDashes.end());
+
+            // Build base folder URL
+            string folderUrl = "https://www.sec.gov/Archives/edgar/data/" + folderCIK + "/" + accessionNoDashes + "/infotable.xml";
+
+            string quarter;
+            if (dateFiled.size() >= 7) {
+                int month = stoi(dateFiled.substr(5, 2));
+                int year = stoi(dateFiled.substr(0, 4));
+                int q = (month - 1) / 3 + 1;
+                quarter = to_string(year) + "Q" + to_string(q);
+            } else {
+                quarter = "Unknown";
+            }
+            filings.emplace_back(name, folderUrl, quarter, dateFiled); // We'll resolve file name later (e.g., infotable.xml)
+        }
+    }
+
+    return filings;
+}
 
 // Download a URL into a string
 string fetchURL(const string& url) {
@@ -110,7 +187,7 @@ string fetchURL(const string& url) {
     return response;
 }
 
-void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs,const string& firmName, sqlite3* db) {
+void parse13F(string const& xmlContent, vector<string> const& targetCUSIPs, string const& name, string const& quarter, string const& filing_date, sqlite3* db) {
     if (xmlContent.find("<html") != string::npos || xmlContent.find("<!DOCTYPE html") != string::npos) {
         cerr << "Received HTML instead of XML. Probably an error page." << endl;
         return;
@@ -136,13 +213,13 @@ void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs,const
 
     // Insert or ignore firm (prepared)
     sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO firms (name) VALUES (?);", -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, firmName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
     // Select firm ID
     sqlite3_prepare_v2(db, "SELECT id FROM firms WHERE name = ?;", -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, firmName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
     int firm_id = -1;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         firm_id = sqlite3_column_int(stmt, 0);
@@ -151,18 +228,21 @@ void parse13F(const string& xmlContent, const vector<string>& targetCUSIPs,const
 
     // Add a sample filing (e.g., "2025-03-31", "2025Q1")
     sqlite3_prepare_v2(db, 
-        "INSERT OR IGNORE INTO filings (firm_id, filing_date, quarter) VALUES (?, '2025-03-31', '2025Q1');",
+        "INSERT OR IGNORE INTO filings (firm_id, filing_date, quarter) VALUES (?, ?, ?);",
         -1, &stmt, nullptr);
     sqlite3_bind_int(stmt, 1, firm_id);
+    sqlite3_bind_text(stmt, 2, filing_date.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, quarter.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
     // Get filing ID
     int filing_id = -1;
     sqlite3_prepare_v2(db,
-        "SELECT id FROM filings WHERE firm_id = ? AND quarter = '2025Q1';",
+        "SELECT id FROM filings WHERE firm_id = ? AND quarter = ?;",
         -1, &stmt, nullptr);
     sqlite3_bind_int(stmt, 1, firm_id);
+    sqlite3_bind_text(stmt, 2, quarter.c_str(), -1, SQLITE_TRANSIENT);
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         filing_id = sqlite3_column_int(stmt, 0);
     }
@@ -247,27 +327,23 @@ int main() {
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    // SEC XML 13F links for Goldman Sachs (example)
-    vector<pair<string,string>> filings = {
-        {//"Goldman Sachs", "https://www.sec.gov/Archives/edgar/data/886982/000076999325000340/2025Q1updated.xml"},
-        {"Key Colony Management, LLC", "https://www.sec.gov/Archives/edgar/data/1336885/000095012325006170/42945.xml" }
-    };
-
     vector<string> targetCUSIPs = {
         "037833100", // AAPL
         "594918104", // MSFT
         "00217D100"  // ASTS
     };
 
-    for (const auto& [firmName, url] : filings) {
-        cout << "\n--- Processing: " << firmName << " | " << url << " ---\n";
-        string xmlContent = fetchURL(url);
+    vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master.idx");
+
+    for (const auto& [name, folderUrl, quarter, filing_date] : filings) {
+        cout << name << " => " << folderUrl << endl;
+        string xmlContent = fetchURL(folderUrl);
         if (xmlContent.empty()) {
-            cerr << "Failed to download XML from " << url << endl;
+            cerr << "Failed to download XML from " << folderUrl << endl;
             continue;
         }
-        parse13F(xmlContent, targetCUSIPs, firmName, db);
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        parse13F(xmlContent, targetCUSIPs, name, quarter, filing_date, db);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     sqlite3_close(db);
