@@ -415,6 +415,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   <ItemGroup>
     <ClCompile Include="C:\Users\vilhe\Finance_app\main.cc" />
     <ClCompile Include="C:\Users\vilhe\Finance_app\sqlite3.c" />
+    <ClCompile Include="C:\Users\vilhe\Finance_app\sec_parser.cc" />
     <Natvis Include="C:\Users\vilhe\vcpkg\installed\x64-windows\share\nlohmann_json\nlohmann_json.natvis">
     </Natvis>
   </ItemGroup>

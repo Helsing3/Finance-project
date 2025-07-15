@@ -64,19 +64,20 @@ WHERE fi.name = 'TRAN CAPITAL MANAGEMENT, L.P.';
 
 /* try this when you have downloaded data from multiple quarters.
 -- Compare how many shares of AAPL a firm held in Q2 vs Q3
-SELECT 
-    f.name AS firm_name,
-    q1.shares AS shares_Q2,
-    q2.shares AS shares_Q3
+SELECT
+    h.name_of_issuer,
+    SUM(CASE WHEN f.quarter = '2025Q1' THEN h.value ELSE 0 END) AS q1_holdings,
+    SUM(CASE WHEN f.quarter = '2025Q2' THEN h.value ELSE 0 END) AS q2_holdings
 FROM
-    (SELECT firm_id, shares FROM holdings h
-     JOIN filings f ON h.filing_id = f.id
-     WHERE cusip = '037833100' AND quarter = '2025Q2') q1
+    holdings h
 JOIN
-    (SELECT firm_id, shares FROM holdings h
-     JOIN filings f ON h.filing_id = f.id
-     WHERE cusip = '037833100' AND quarter = '2025Q3') q2
-ON q1.firm_id = q2.firm_id
-JOIN firms f ON f.id = q1.firm_id;
+    filings f ON h.filing_id = f.id
+WHERE
+    f.quarter IN ('2025Q1', '2025Q2')
+GROUP BY
+    h.name_of_issuer
+ORDER BY
+    q2_holdings DESC;
+
 
 */

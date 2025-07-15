@@ -7,6 +7,9 @@
     <ClCompile Include="C:\Users\vilhe\Finance_app\sqlite3.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\vilhe\Finance_app\sec_parser.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="C:\Users\vilhe\Finance_app\CMakeLists.txt" />
