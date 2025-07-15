@@ -262,6 +262,7 @@ void parse13F(string const& xmlContent, vector<string> const& targetCUSIPs, stri
         const char* name = getText(entry, "nameOfIssuer");
         const char* cusip = getText(entry, "cusip");
         const char* value = getText(entry, "value");
+        const char* put_call = getText(entry, "putCall");  
 
         // sshPrnamt is nested inside <shrsOrPrnAmt>
         const char* shares = nullptr;
@@ -276,21 +277,44 @@ void parse13F(string const& xmlContent, vector<string> const& targetCUSIPs, stri
             shares = getText(shrsOrPrnAmt, "sshPrnamt");
         }
 
-        if (!name || !cusip || !value || !shares) continue;
+        if (filing_id == -1) {
+            std::cerr << "Error: filing_id not found for firm_id " << firm_id << " and quarter " << quarter << std::endl;
+            return;
+        }
 
+        if (!name || !cusip || !shares) {
+            std::cerr << "Skipping entry — missing fields: "
+                      << (name ? "" : "name ") 
+                      << (cusip ? "" : "cusip ") 
+                      << (shares ? "" : "shares ") 
+                      << std::endl;
+            continue;
+        }        
+        
         string cusipStr = trim(cusip);
 
         // Insert all entries
         sqlite3_prepare_v2(db,
-            "INSERT OR IGNORE INTO holdings (filing_id, cusip, name_of_issuer, shares, value) VALUES (?, ?, ?, ?, ?);",
+            "INSERT OR IGNORE INTO holdings (filing_id, cusip, name_of_issuer, shares, value, put_call) VALUES (?, ?, ?, ?, ?, ?);",
             -1, &stmt, nullptr);
+        
         sqlite3_bind_int(stmt, 1, filing_id);
         sqlite3_bind_text(stmt, 2, cusipStr.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 3, name, -1, SQLITE_STATIC);
         sqlite3_bind_int64(stmt, 4, atoll(shares));
-        sqlite3_bind_int64(stmt, 5, atoll(value));
+        // Safely handle NULL value
+        sqlite3_bind_int64(stmt, 5, value ? atoll(value) : 0);
+        // Safely handle NULL put_call
+        sqlite3_bind_text(stmt, 6, put_call ? put_call : nullptr, -1, SQLITE_STATIC);
         sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
+        int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE) {
+            std::cerr << "Insert failed: " << sqlite3_errmsg(db) << std::endl;
+        } else {
+            //std::cout << "Insert successful" << std::endl;
+        }
+
+        sqlite3_finalize(stmt);        
 
         // Track totals for optional reporting
         if (find(targetCUSIPs.begin(), targetCUSIPs.end(), cusipStr) != targetCUSIPs.end()) {
@@ -299,12 +323,11 @@ void parse13F(string const& xmlContent, vector<string> const& targetCUSIPs, stri
         }
     }
 
-    for (const auto& target : targetCUSIPs) {
+    /*for (const auto& target : targetCUSIPs) {
         cout << "Total for CUSIP " << target << ": Value = $" << totalValue[target] 
              << "K, Shares = " << totalShares[target] << endl;
-    }
+    }*/
 }
-
 
 int main() {
     
@@ -333,8 +356,9 @@ int main() {
         "00217D100"  // ASTS
     };
 
+    vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master2025Q1.idx");
     //vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master2025Q2.idx");
-    vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master2025Q3.idx");
+    //vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master2025Q3.idx");
 
     for (const auto& [name, folderUrl, quarter, filing_date] : filings) {
         cout << name << " => " << folderUrl << endl;

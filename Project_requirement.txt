@@ -1,0 +1,199 @@
+1. Project Overview
+
+The goal is to develop a financial analytics platform that allows users to analyze firm-level investment data across the USA, UK, and Sweden. The platform will combine holdings data, stock financials, ownership intelligence, and multimedia context into a unified tool. Key differentiators include AI-powered queries, international data coverage, and a deep focus on firm behavior over time.
+
+2. Core Features (MVP)
+
+2.1 Firm Investment Data Aggregation
+
+Countries Covered: USA, UK, Sweden
+
+Sources: SEC (13F), Morningstar/FactSet, Sweden Finansinspektionen
+
+Update Frequency: Quarterly
+
+Data Collected:
+
+Firms’ portfolio holdings
+
+Buy/sell activity per quarter
+
+Market values per stock position
+
+2.2 Quarterly Comparison Engine
+
+Visual tool to compare firm portfolios over different quarters
+
+Identify increases, decreases, new additions, and removals
+
+Sort and filter by firm, sector, stock, country
+
+2.3 Holdings Explorer
+
+Select a stock → view all firms that own it
+
+See other stocks those firms hold
+
+Sort by ownership percentage, market value, change over time
+
+2.4 Stock Screener
+
+Search/filter stocks by financial metrics:
+
+P/E ratio, Market Cap, Sector, Country
+
+Ownership traits: Insider %, Institutional %, Smart Money %
+
+2.5 ChatGPT-Powered Query Interface
+
+Natural language interface for data queries:
+
+"What did firms who sold Nvidia last quarter buy instead?"
+
+"List 10 stocks most bought by Swedish firms this year."
+
+Answers are generated using structured investment and stock data
+
+3. Advanced Features (Post-MVP)
+
+3.1 Deep Stock Detail Page
+
+Each stock will have its own page featuring:
+
+180-day price chart
+
+CNN Smart Score or equivalent
+
+Upcoming earnings report date
+
+Insider trading activity (board & US government)
+
+Analyst price targets (avg, high, low)
+
+Short float, insider ownership, institutional ownership
+
+Ownership category trend (Retail / Institutional / Insider / Gov)
+
+Links to relevant:
+
+YouTube videos
+
+X (Twitter) posts
+
+Podcasts
+
+3.2 Ownership Intelligence Layer
+
+Determine the dominant investor type driving the stock
+
+Flag unusual trends (e.g., rising retail interest in an institutional stock)
+
+3.3 Multimedia Aggregation
+
+Automated scraping/tagging of multimedia content relevant to each stock
+
+Filter by type (video, post, audio), sentiment, source credibility
+
+4. Technical Architecture
+
+4.1 Backend
+
+Language: Python
+
+Framework: FastAPI
+
+Database: PostgreSQL
+
+Scheduling: Airflow or Celery for periodic data updates
+
+4.2 Frontend
+
+Framework: React (Next.js optional)
+
+Styling: Tailwind CSS
+
+Charts: Recharts, TradingView widget
+
+AI Chat: OpenAI GPT-4 API wrapper
+
+4.3 Data Sources
+
+Investment Holdings:
+
+SEC EDGAR (13F), UK Companies House, Sweden Finansinspektionen
+
+Stock Data:
+
+Yahoo Finance, Finnhub, Alpha Vantage
+
+Insider Trading:
+
+OpenInsider, Quiver Quant
+
+Media:
+
+YouTube API, X API (if possible), podcast RSS feeds
+
+5. Competitive Edge
+
+International data (UK, Sweden in addition to USA)
+
+Conversational AI interface for natural language querying
+
+Quarterly portfolio tracking to identify conviction trades
+
+Ownership intelligence showing dominant investor type per stock
+
+Multimedia integration to provide richer stock context
+
+6. Development Milestones
+
+Phase 1 (Weeks 1-3):
+
+Backend setup and database schema for holdings
+
+Import USA firm data via SEC API
+
+Initial frontend scaffolding
+
+Phase 2 (Weeks 4-6):
+
+Implement quarterly comparison engine
+
+Holdings explorer view
+
+Basic screener with P/E and sector filters
+
+Phase 3 (Weeks 7-9):
+
+Add ChatGPT wrapper and integrate structured data access
+
+Enable query-based output from historical holdings
+
+Phase 4 (Weeks 10-12):
+
+Build out stock detail pages (initial version)
+
+Add ownership insights
+
+Post-MVP:
+
+Expand to UK and Sweden firm data
+
+Add media integrations
+
+Build smart ownership intelligence
+
+7. KPIs / Success Metrics
+
+Number of stocks and firms covered
+
+Accuracy and freshness of data
+
+Query success rate from ChatGPT interface
+
+Average time spent on stock detail pages
+
+User feedback on insights and interface usability
+
+Date: July 15, 2025
