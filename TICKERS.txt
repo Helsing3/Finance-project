@@ -1,4 +1,0 @@
-AAPL
-MSFT
-TSLA
-ASTS

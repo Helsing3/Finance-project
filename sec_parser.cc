@@ -104,9 +104,9 @@ vector<tuple<string, string,string, string>> extract13FHRUrls(const string& idxP
     ifstream file(idxPath);
     vector<tuple<string, string,string, string>> filings;
     if (!file.is_open()) {
-        cerr << "Could not open master.idx file.\n";
+        cerr << "Could not open file: " << idxPath << "\n";
         return filings;
-    }
+    }    
 
     string line;
     bool startReading = false;

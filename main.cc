@@ -29,7 +29,7 @@ int main() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     //vector<tuple<string, string, string, string>> filings = extract13FHRUrls("master2025Q1.idx");
-    vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master2025Q2.idx");
+    vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master_idx/master2025Q2.idx");
     //vector<tuple<string, string,string,string>> filings = extract13FHRUrls("master2025Q3.idx");
 
     for (const auto& [name, folderUrl, quarter, filing_date] : filings) {

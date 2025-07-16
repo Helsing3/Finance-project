@@ -4,7 +4,7 @@
     <ClCompile Include="C:\Users\vilhe\Finance_app\main.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="C:\Users\vilhe\Finance_app\sqlite3.c">
+    <ClCompile Include="C:\Users\vilhe\Finance_app\sqlite\sqlite3.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="C:\Users\vilhe\Finance_app\sec_parser.cc">

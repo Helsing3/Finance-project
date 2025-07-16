@@ -44,15 +44,23 @@ CREATE INDEX idx_holdings_cusip ON holdings(cusip); -- for fast issuer-wide quer
 
 /* -- usful prompts to show information after ./sqlite3.exe holdings.db
 SELECT
-  RANK() OVER (ORDER BY SUM(h.value) DESC) AS rank,
-  h.cusip,
   MIN(h.name_of_issuer) AS issuer_name,
   SUM(h.shares) AS total_shares,
   SUM(h.value) AS total_value
 FROM holdings h
-GROUP BY h.cusip
+WHERE LOWER(h.name_of_issuer) LIKE '%ast space%';
+
+
+SELECT
+  RANK() OVER (ORDER BY SUM(h.value) DESC) AS rank,
+  h.name_of_issuer AS issuer_name,
+  SUM(h.shares) AS total_shares,
+  SUM(h.value) AS total_value
+FROM holdings h
+GROUP BY h.name_of_issuer
 ORDER BY total_value DESC;
-WHERE LOWER(h.name_of_issuer) LIKE '%ast space%' // optional
+
+
 */
 /*
 SELECT h.*
